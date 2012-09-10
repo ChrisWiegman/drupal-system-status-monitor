@@ -1,0 +1,335 @@
+<?php
+// $Id$ 
+
+/**
+ * @file
+ * Creates block selecting a random YouTube video from a given list
+ */
+
+/**
+ * Valid permissions for this module
+  * @return array An array of valid permissions for the systemstatus module
+ */
+function systemstatus_perm() {
+	return array( 'administer system status reporter', 'update system statuses' );
+}
+
+/**
+ *Create the admin form
+ */
+function systemstatus_admin() {
+
+	$form = array();
+
+  	$form['settings']['systemstatus_blocktitle'] = array(
+    	'#type'				=> 'textfield',
+	    '#title'			=> t( 'Block Title' ),
+    	'#default_value'	=> variable_get( 'systemstatus_blocktitle', 'Service Status' ),
+	    '#size'				=> 20,
+	    '#description'		=> t( 'Enter the title for the block to be displayed to the user (you can also override this in the block configuration).'),
+    	'#required'			=> FALSE,
+	);
+  	
+  	$form['systemstatus_systems'] = array(
+    	'#type'				=> 'textarea',
+	    '#title'			=> t( 'Systems List' ),
+    	'#default_value'	=> variable_get( 'systemstatus_systems', '' ),
+	    '#cols'				=> 60,
+	    '#rows'				=> 10,
+    	'#resizable'		=> TRUE,
+	    '#description'		=> t( 'List of Systems to check. For web (http) systems enter as <em>[system name],[url]</em>. Only one system per line.' ),
+    	'#required'			=> TRUE,
+    	'#wysiwyg'			=> FALSE,
+	);
+
+  	return system_settings_form( $form );
+
+}
+
+/**
+ *Create the menu item for the menu page
+ */
+function systemstatus_menu() {
+
+  	$items = array();
+
+  	$items['admin/settings/systemstatus'] = array(
+    	'title' => 'System Status Reporter Settings',
+	    'description' => 'Administer System Status Reporter Settings',
+    	'page callback' => 'drupal_get_form',
+	    'page arguments' => array( 'systemstatus_admin' ), //call the options function
+    	'access arguments' => array( 'administer system status reporter' ), //which permission accesses
+	    'type' => MENU_NORMAL_ITEM,
+   	);
+
+  	return $items;
+}
+
+/**
+ *Validate user input
+ */
+function systemstatus_admin_validate( $form, &$form_state ) {
+
+	@ini_set( 'auto_detect_line_endings', true ); //standardize line endings
+	
+	$systemsArray = explode( PHP_EOL, $form_state['values']['systemstatus_systems'] );
+	
+	$line = 1;
+
+	foreach ( $systemsArray as $system ) {
+
+		if ( strstr( $system, ',' ) !== false ) { //make sure there is a URL
+
+			$sysAttr = explode( ',', $system ); //split the url
+
+			if ( sizeof( $sysAttr ) > 2 ) { //throw an error if we put in too many commas
+
+				form_set_error( 'systemstatus_systems', t( 'The entry <em>' . $system . '</em> on line ' . $line . ' does not appear to be valid.' ) );
+
+			}
+
+			if ( ! valid_url( trim( $sysAttr[1] ), true ) ) { //verify the URL is valid, return error if not.
+    			
+    			form_set_error( 'systemstatus_systems', t( 'The URL <em>' . $sysAttr[1] . '</em> on line ' . $line . ' does not appear to be a valid url.' ) );
+  			}
+
+  			$sysTitle = $sysAttr[0]; //Set the system title to validate later
+
+		} else {
+
+			$sysTitle = $system; //Set the system title to validate later
+
+		}
+
+		if ( systemstatus_sanitize_string( $sysTitle ) === false ) { //make sure the system title is a valid string
+
+  			form_set_error( 'systemstatus_systems', t( 'The System <em>' . $sysTitle . '</em> on line ' . $line . ' does not appear to be a valid system name. System names must can contain only letters, numbers, and spaces.' ) );
+
+  		}
+  			
+  		$line++;
+
+  	}
+
+}
+
+/**
+ * validates strings for input
+ */
+function systemstatus_sanitize_string( $string ) {
+
+	$filtered = filter_var( $string, FILTER_SANITIZE_STRING ); //create a filtered version of the string
+
+	return strcmp( $string, $filtered ) == 0 ? true : false; //return true if the filter didn't change anything. False if it did.
+
+}
+
+/**
+ *Create a block for displaying the status report
+ */
+function systemstatus_block( $op='list', $delta=0, $edit=array() ) {
+
+	switch ( $op ) {
+	
+		case 'list': //list the block in the blocks administration page
+			$blocks[0]['info'] = t( 'Systems Status Reporter' );
+			$blocks[1]['info'] = t( 'Systems Status Editor' );
+			return $blocks;
+			break;
+
+		case 'view': //view the block
+
+			if ( $delta == 0 ) {
+			
+				$blocks['subject'] = t( variable_get( 'systemstatus_blocktitle', 'Service Status' ) );
+				$blocks['content'] = systemstatus_content();
+
+			} elseif ( $delta == 1 && user_access( 'update system statuses' ) ) { //user can change systems status
+
+				$blocks['subject'] = t( 'Edit Service Status' );
+				$blocks['content'] = drupal_get_form( 'systemstatus_serviceform' );
+
+			}
+
+			return $blocks;
+			break;
+
+
+	}
+
+}
+
+/**
+ *Add a form to update system status
+ */
+function systemstatus_serviceform( &$form_state ) {
+
+	@ini_set( 'auto_detect_line_endings', true ); //standardize line endings
+
+	$systems = explode( PHP_EOL, variable_get( 'systemstatus_systems', NULL ) ); //get a list of systems
+
+	$form = array(); //initialize the form
+
+	foreach ( $systems as $system ) {
+
+		/*
+		 Status
+		 0 = good
+		 1 = autocheck bad
+		 2 = bad
+		*/
+
+		$commapos = strstr( $system, ',' ) === false ? false : strpos( $system, ',' ); //find the comma delimiter if present
+		$sysTitle = $commapos === false ? $system : substr( $system, 0, $commapos ); //get the system title
+		$sysGenTitle = str_replace( ' ', '_', $sysTitle ); //generate a title that can be used to save status
+		
+		$statuses = array( 0 => 'Up', 1 => 'Error', 2 => 'Down' );
+
+		$form['systemstatus_system_' . $sysGenTitle] = array(
+			'#type' => 'select',
+			'#title' => t( $sysTitle ),
+			'#default_value' => variable_get( 'systemstatus_system_' . $sysGenTitle, 0 ),
+			'#options' => $statuses,
+		);
+
+	}
+
+	$form['submit'] = array(
+		'#type' => 'submit',
+		'#value' => t( 'Save' ),
+	);
+
+	return $form;
+
+}
+
+/**
+ *Save the service form
+ */
+function systemstatus_serviceform_submit( $form, &$form_state ) {
+
+	//die( var_dump( $form['#post'] ) );
+
+	if ( user_access( 'update system statuses' ) ) {
+
+		foreach ( $form['#post'] as $field => $value )
+
+		if ( strpos( $field, 'systemstatus_system_' ) !== false ) {
+			if ( variable_get( $field, '' ) !== $value ) {
+				variable_set( $field, $value );
+				$sysname = substr( $field , 20 );
+				variable_set( 'systemstatus_statustime_' . $sysname, $time );
+			}
+		}
+
+	}
+
+}
+
+/**
+ *Display the system status in a block
+ */
+function systemstatus_content() {
+
+	@ini_set( 'auto_detect_line_endings', true ); //standardize line endings
+
+	drupal_add_css( drupal_get_path( 'module', 'systemstatus' ) . '/css/styles.css' ); //enqueue styles
+
+	$systems = explode( PHP_EOL, variable_get( 'systemstatus_systems', NULL ) ); //get a list of systems
+
+	$output = '<table class="servicestable">' . PHP_EOL;
+
+	foreach ( $systems as $system ) {
+
+		/*
+		 Status
+		 0 = good
+		 1 = autocheck bad
+		 2 = bad
+		*/
+
+		/* Get Saved Data or easily generated data */
+		$commapos = strstr( $system, ',' ) === false ? false : strpos( $system, ',' ); //find the comma delimiter if present
+		$sysTitle = $commapos === false ? $system : substr( $system, 0, $commapos ); //get the system title
+		$sysGenTitle = str_replace( ' ', '_', $sysTitle ); //generate a title that can be used to save status		
+		$sysStatus = variable_get( 'systemstatus_system_' . $sysGenTitle, 0 ); //get the status if we've saved it
+		$statusTime = variable_get( 'systemstatus_statustime_' . $sysGenTitle, 0 ); //the time the status was last set manually
+
+		/* Regenerate status if needed for auto checks */
+		if ( $commapos !== false ) {
+
+			$sysUrl = $commapos === false ? false : substr( $system, $commapos + 1, strlen( $system ) ); //get the systemurl (if present)
+
+			if ( $sysStatus !== 2 ) { //don't check if the status has been set manually to "down"
+
+				$autostatus = systemstatus_checkurl( $sysUrl ); //check the site status with CURL
+
+				if ( $autostatus === false && $sysStatus === 0 ) { //reset status to auto bad
+
+					$sysStatus = 1;
+					$statusTime = time();
+					variable_set( 'systemstatus_statustime_' . $sysGenTitle, $statusTime );
+					variable_set( 'systemstatus_system_' . $sysGenTitle, 1 );
+
+				} elseif ( $autostatus === true && $sysStatus === 1 ) { //reset status to good
+
+					$sysStatus = 0;
+					$statusTime = time();
+					variable_set( 'systemstatus_statustime_' . $sysGenTitle, $statusTime );
+					variable_set( 'systemstatus_system_' . $sysGenTitle, 0 );
+
+				}
+
+			}
+
+		}
+
+		switch ( $sysStatus ) {
+
+			case 0:
+				$statusImg = '/' . drupal_get_path( 'module', 'systemstatus' ) . '/images/up.png';
+				$statusAlt = 'Service up at ' . date( 'D, F jS, Y \a\t g:i: a', $statusTime );
+				break;
+			case 1:
+				$statusImg = '/' . drupal_get_path( 'module', 'systemstatus' ) . '/images/detecteddown.png';
+				$statusAlt = 'Service appeared to be down at ' . date( 'D, F jS, Y \a\t g:i: a', $statusTime ) . ' but has not been confirmed.';
+				break;
+			case 2:
+				$statusImg = '/' . drupal_get_path( 'module', 'systemstatus' ) . '/images/down.png';
+				$statusAlt = 'Service down at ' . date( 'D, F jS, Y \a\t g:i: a', $statusTime );;
+				break;
+
+		}
+
+		$output .= '<tr class="servicerow">' . PHP_EOL;
+
+		$output .= '<td class="systitle">' . $sysTitle . '</td>' . PHP_EOL;
+		$output .= '<td class="sysstatus"><img class="sysstatusimg" src="' . $statusImg . '" alt="' .  $statusAlt . ' width="20" height="20" style="width: 20px; height: 20px; margin: 5px 0 5px 0" /></td>' . PHP_EOL;
+
+		$output .= '</tr>' . PHP_EOL;		
+
+	}
+
+	$output .= '</table>' . PHP_EOL;
+
+	return $output;
+	
+}
+
+/**
+ * Check if URL is working
+ */
+function systemstatus_checkurl( $url ) {
+ 
+	$conn = curl_init( trim( $url ) );
+	curl_setopt( $conn, CURLOPT_NOBODY, true );
+	curl_setopt( $conn, CURLOPT_FOLLOWLOCATION, true );
+	curl_exec( $conn );
+	
+	$response = curl_getinfo( $conn, CURLINFO_HTTP_CODE ); //get the http status code
+	
+	curl_close( $conn ); 
+
+	return intval( $response ) === 200 ? true : false; //if we get a 200 return true, else false
+
+}

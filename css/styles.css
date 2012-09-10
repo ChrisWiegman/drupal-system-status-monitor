@@ -1,0 +1,31 @@
+img.sysstatusimg {
+	height: 20px;
+	padding: 0;
+	width: 20px;
+}
+
+.systitle {
+	font-weight: bold;
+}
+
+td.sysstatus {
+	width: 30px;
+}
+
+.servicestable,
+#systemstatus-serviceform {
+	width: 100%;
+}
+
+#systemstatus-serviceform {
+	padding: 10px;
+}
+
+#systemstatus-serviceform label {
+	float: left;
+	padding-right: 10px;
+}
+
+#systemstatus-serviceform div.form-item {
+	border-bottom: 1px solid #ccc;
+}

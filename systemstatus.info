@@ -1,0 +1,4 @@
+; $Id$
+name = "System Status Reporter"
+description = "Creates block to report the running status of specified systems."
+core = 6.x

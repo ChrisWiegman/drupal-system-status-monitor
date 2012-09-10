@@ -1,0 +1,52 @@
+<?php
+// $Id$ 
+
+/**
+ * @file
+ * Implement CCK's install/uninstall hooks.
+ */
+
+/**
+ * Implementation of hook_install().
+ */
+function systemstatus_install() {
+	drupal_load( 'module', 'content' );
+	if ( function_exists( 'content_notify' ) ) {
+		content_notify( 'install', 'systemstatus' );
+	}
+}
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function systemstatus_uninstall() {
+	db_query( "DELETE FROM {variable} WHERE name LIKE 'systemstatus_%';" );
+	drupal_load( 'module', 'content' );
+	if ( function_exists( 'content_notify' ) ) {
+		content_notify( 'uninstall', 'systemstatus' );
+	}
+}
+
+/**
+ * Implementation of hook_enable().
+ *
+ * Notify content module when this module is enabled.
+ */
+function systemstatus_enable() {
+	drupal_load( 'module', 'content' );
+	if ( function_exists( 'content_notify' ) ) {
+		content_notify( 'enable', 'systemstatus' );
+	}
+}
+
+/**
+ * Implementation of hook_disable().
+ *
+ * Notify content module when this module is disabled.
+ */
+function systemstatus_disable() {
+	drupal_load( 'module', 'content' );
+	if ( function_exists( 'content_notify' ) ) {
+		content_notify( 'disable', 'systemstatus' );
+	}
+}
